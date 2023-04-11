@@ -92,7 +92,6 @@ class Word_Recognizer:
             freq = np.array([freq[i] + smooth for i in range(nlabels)])
 
         freq = freq / freq.sum()
-
         return freq
 
     def init_letter_hmm(self, lbl_freq, lbl_freq_noise, id2letter):
@@ -104,7 +103,11 @@ class Word_Recognizer:
             if letter_id == self.noise_id:
                 # HMM for silence and non-speech sounds
                 letter_id2hmm[letter_id] = HMM(num_states=5, num_outputs=len(self.lblnames))
-                letter_id2hmm[letter_id].init_transition_probs(np.asarray([[0.25, 0.25, 0.25, 0.25, 0.0], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.0, 0.0, 0.0, 0.75]], dtype=np.float64))
+                letter_id2hmm[letter_id].init_transition_probs(np.asarray([[0.25, 0.25, 0.25, 0.25, 0.0], 
+                                                                           [0.0, 0.25, 0.25, 0.25, 0.25], 
+                                                                           [0.0, 0.25, 0.25, 0.25, 0.25], 
+                                                                           [0.0, 0.25, 0.25, 0.25, 0.25], 
+                                                                           [0.0, 0.0, 0.0, 0.0, 0.75]], dtype=np.float64))
                 
                 emission_probs = np.zeros((len(self.lblnames), 5, 5))
                 # arc with non-zero transition probability
@@ -118,7 +121,9 @@ class Word_Recognizer:
             else:
                 # HMM for letters
                 letter_id2hmm[letter_id] = HMM(num_states=3, num_outputs=len(self.lblnames))
-                letter_id2hmm[letter_id].init_transition_probs(np.asarray([[0.8, 0.2, 0.0], [0.0, 0.8, 0.2], [0.0, 0.0, 0.8]], dtype=np.float64))
+                letter_id2hmm[letter_id].init_transition_probs(np.asarray([[0.8, 0.2, 0.0], 
+                                                                           [0.0, 0.8, 0.2], 
+                                                                           [0.0, 0.0, 0.8]], dtype=np.float64))
                 
                 emission_probs = np.zeros((len(self.lblnames), 3, 3))
                 # arc with non-zero transition probability
@@ -174,22 +179,13 @@ class Word_Recognizer:
         init_prob=np.asarray([1] + [0] * (word_hmm.num_states - 1), dtype=np.float64)
         # Reset the counters each forward-backward pass
         alphas_, betas_, Q = word_hmm.forward_backward(lbls, init_prob, update_params=False)
-
-        if self.letter_id2hmm[self.noise_id].output_arc_counts is None:
-            self.letter_id2hmm[self.noise_id].reset_counters()
-        else:
-            # update non-null arc counter for SIL
-            self.letter_id2hmm[self.noise_id].output_arc_counts += word_hmm.output_arc_counts[:, 0:5, 0:5]
-            self.letter_id2hmm[self.noise_id].output_arc_counts += word_hmm.output_arc_counts[:, -5:, -5:]
+    
+        self.letter_id2hmm[self.noise_id].output_arc_counts += word_hmm.output_arc_counts[:, 0:5, 0:5]
+        self.letter_id2hmm[self.noise_id].output_arc_counts += word_hmm.output_arc_counts[:, -5:, -5:]
 
         for idx, letter_id in enumerate(scr):
-            # update letter counter
-            if self.letter_id2hmm[letter_id].output_arc_counts is None:
-                # output_arc_counts: (256, 3, 3)
-                self.letter_id2hmm[letter_id].reset_counters()
-            else:
-                # update non-null arc counter for letter HMM
-                self.letter_id2hmm[letter_id].output_arc_counts += word_hmm.output_arc_counts[:, 5+idx*3:5+(idx+1)*3, 5+idx*3:5+(idx+1)*3]
+            # update non-null arc counter for letter HMM
+            self.letter_id2hmm[letter_id].output_arc_counts += word_hmm.output_arc_counts[:, 5+idx*3:5+(idx+1)*3, 5+idx*3:5+(idx+1)*3]
 
     def update_params(self):
         # update the parameters of the 23 letter HMMs and 1 SIL HMM after all 798 forward-backward passes are completed, 
@@ -219,6 +215,11 @@ class Word_Recognizer:
             print("---- echo: %d ----" % i_epoch)
             log_likelihood = 0
             num_frames = 0
+            
+            # reset the counters of the 23 letter HMMs and 1 SIL HMM
+            for letter_id in self.letter_id2hmm.keys():
+                self.letter_id2hmm[letter_id].reset_counters()
+
             for scr, lbls in zip(trnscr_sorted, trnlbls_sorted):
                 # create a word HMM for each word
                 word_hmm = self.get_word_model(scr)
