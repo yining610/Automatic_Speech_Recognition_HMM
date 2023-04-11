@@ -101,8 +101,7 @@ class Word_Recognizer:
         
         letter_id2hmm = {}
         for letter_id in range(len(id2letter)):
-            letter = id2letter[letter_id]
-            if letter == NOISE:
+            if letter_id == self.noise_id:
                 # HMM for silence and non-speech sounds
                 letter_id2hmm[letter_id] = HMM(num_states=5, num_outputs=len(self.lblnames))
                 letter_id2hmm[letter_id].init_transition_probs(np.asarray([[0.25, 0.25, 0.25, 0.25, 0.0], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.25, 0.25, 0.25, 0.25], [0.0, 0.0, 0.0, 0.0, 0.75]], dtype=np.float64))
