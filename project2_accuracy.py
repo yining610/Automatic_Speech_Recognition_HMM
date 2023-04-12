@@ -218,8 +218,8 @@ class Word_Recognizer:
                 valscr.append(scr)
                 vallbls.append(lbls)
 
-        print(f"Training set size: {len(trnscr)}")
-        print(f"Validation set size: {len(valscr)}")
+        print(f"Kept set size: {len(trnscr)}")
+        print(f"Held-out set size: {len(valscr)}")
 
         return trnscr, trnlbls, valscr, vallbls
         
