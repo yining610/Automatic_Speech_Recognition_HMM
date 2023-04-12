@@ -17,7 +17,7 @@ Train and test the model with $N^\ast = 3$: ```python project2_accuracy.py --num
 
 The best held-out accuracy is $0.7215189873417721$ after 3 epochs.
 
-Two new functions compare to the file ```project2.py```:
+Two new functions in ```project2_accuracy.py``` compare to the file ```project2.py```:
 1. The function ```data_split(self, train_ratio=0.8)``` splits the training data to kept and held-out data with ratio $0.8$.
 2. The function ```test_val_acc(self, valscr, vallbls)``` evalute the accurcy on the held-out data. 
 
