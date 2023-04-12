@@ -15,6 +15,7 @@ from itertools import chain
 from tqdm import tqdm
 from scipy.special import logsumexp
 import pickle
+import argparse
 
 NOISE = "<noise>"
 data_dir = "./data"
@@ -36,7 +37,7 @@ def read_file_line_by_line(file_name, func=lambda x: x, skip_header=True):
 
 class Word_Recognizer:
 
-    def __init__(self, restore_ith_epoch=None):
+    def __init__(self, args):
         # read labels
         self.lblnames = read_file_line_by_line(os.path.join(data_dir, "clsp.lblnames"))
 
@@ -76,6 +77,9 @@ class Word_Recognizer:
 
         # get hmms for each letter
         self.letter_id2hmm = self.init_letter_hmm(lbl_freq, lbl_freq_noise, self.id2letter)
+
+        self.find_N = args.find_N
+        self.num_epochs = args.num_epochs
 
     def get_unigram(self, trnlbls, nlabels, smooth=0, endpts=None):
         # Compute "unigram" frequency of the training labels
@@ -197,21 +201,55 @@ class Word_Recognizer:
         for letter_id in self.letter_id2hmm.keys():
             if letter_id != self.noise_id:
                 self.letter_id2hmm[letter_id].update_params()
-    
-    def train(self, num_epochs=1):
 
-        # sort trnlbls, endpts and trnscr such that the same word appear next to each other
-        trnlbls_sorted = []
-        trnscr_sorted = []
-        for scr, lbls in sorted(zip(self.trnscr, self.trnlbls)):
-            trnlbls_sorted.append(lbls)
-            trnscr_sorted.append(scr)
+    def data_split(self, train_ratio=0.8):
+        """
+        Split the data into training and validation sets.
+        Balance the distribution of word-tokens between the two
+        """
+        np.random.seed(0)
+        # split the data into training and validation sets
+        trnscr, trnlbls, valscr, vallbls = [], [], [], []
+        for scr, lbls in zip(self.trnscr, self.trnlbls):
+            if np.random.rand() < train_ratio:
+                trnscr.append(scr)
+                trnlbls.append(lbls)
+            else:
+                valscr.append(scr)
+                vallbls.append(lbls)
+
+        print(f"Training set size: {len(trnscr)}")
+        print(f"Validation set size: {len(valscr)}")
+
+        return trnscr, trnlbls, valscr, vallbls
         
+    
+    def train(self):
+        if self.find_N:
+            trnscr, trnlbls, valscr, vallbls = self.data_split(train_ratio=0.8)
+
+            # sort trnlbls, endpts and trnscr such that the same word appear next to each other
+            trnlbls_sorted = []
+            trnscr_sorted = []
+            for scr, lbls in sorted(zip(trnscr, trnlbls)):
+                trnlbls_sorted.append(lbls)
+                trnscr_sorted.append(scr)
+        else:
+            # sort trnlbls, endpts and trnscr such that the same word appear next to each other
+            trnlbls_sorted = []
+            trnscr_sorted = []
+            for scr, lbls in sorted(zip(self.trnscr, self.trnlbls)):
+                trnlbls_sorted.append(lbls)
+                trnscr_sorted.append(scr)
+
         log_likelihood_list = []
         per_frame_log_likelihood_list = []
 
+        N = 0 # iteration
+        prev_acc = 0
+
         # training for this many epochs
-        for i_epoch in range(num_epochs):
+        for i_epoch in range(self.num_epochs):
             print("---- echo: %d ----" % i_epoch)
             log_likelihood = 0
             num_frames = 0
@@ -236,25 +274,66 @@ class Word_Recognizer:
             print("log_likelihood =", log_likelihood, "per_frame_log_likelihood =", log_likelihood / num_frames)
             
             self.update_params()
-            self.save(i_epoch)
-        
-        self.test()
-        # plot the log likelihood over epochs
-        plt.figure()
-        plt.plot(log_likelihood_list)
-        plt.xlabel("Epochs")
-        plt.ylabel("Log Likelihood")
-        plt.title("Log Likelihood over Epochs")
-        plt.savefig("log_likelihood.png", dpi=300)
+            if self.find_N:
+                acc = self.test_val_acc(valscr, vallbls)
+                if acc > prev_acc:
+                    prev_acc = acc
+                    N += 1
+                else:
+                    break
+        if self.find_N:
+            print(f"Best validation accuracy: {prev_acc} at epoch {N} out of {self.num_epochs} epochs")
+        else:       
+            self.test()
+            # plot the log likelihood over epochs
+            plt.figure()
+            plt.plot(log_likelihood_list)
+            plt.xlabel("Epochs")
+            plt.ylabel("Log Likelihood")
+            plt.title("Log Likelihood over Epochs")
+            plt.savefig("log_likelihood_N.png", dpi=300)
 
-        # plot the per frame log likelihood over epochs
-        plt.figure()
-        plt.plot(per_frame_log_likelihood_list)
-        plt.xlabel("Epochs")
-        plt.ylabel("Per Frame Log Likelihood")
-        plt.title("Per Frame Log Likelihood over Epochs")
-        plt.savefig("per_frame_log_likelihood.png", dpi=300)
+            # plot the per frame log likelihood over epochs
+            plt.figure()
+            plt.plot(per_frame_log_likelihood_list)
+            plt.xlabel("Epochs")
+            plt.ylabel("Per Frame Log Likelihood")
+            plt.title("Per Frame Log Likelihood over Epochs")
+            plt.savefig("per_frame_log_likelihood_N.png", dpi=300)
 
+
+    def test_val_acc(self, valscr, vallbls):
+        # test the accuracy of the model on the validation vallbls
+        id2words = dict({i: w for i, w in enumerate(self.train_words)})
+        words2id = dict({w: i for i, w in id2words.items()})
+
+        word_likelihoods = np.zeros((len(words2id), len(vallbls)))
+
+        for vallbl_id, vallbl in enumerate(vallbls):
+            for word, word_id in words2id.items():
+                dev_scr = [self.letter2id[c] for c in word]
+                word_hmm = self.get_word_model(dev_scr)
+
+                init_prob = np.asarray([1] + [0] * (word_hmm.num_states - 1), dtype=np.float64)
+                init_beta = np.ones(word_hmm.num_states)
+
+                word_likelihoods[word_id, vallbl_id] = word_hmm.compute_log_likelihood(data = vallbl, 
+                                                                                       init_prob = init_prob, 
+                                                                                       init_beta = init_beta)
+            
+        # find the most likely word for each dev sample
+        result = word_likelihoods.argmax(axis=0)
+        result = [id2words[res] for res in result]
+        result_scr = [[self.letter2id[c] for c in word] for word in result]
+
+        # compute the accuracy
+        acc = 0
+        for i in range(len(result_scr)):
+            if result_scr[i] == valscr[i]:
+                acc += 1
+        acc /= len(result_scr)
+        print("Hold-out accuracy: ", acc)
+        return acc
 
     def test(self):
         # Compute the word likelihood for each dev samples 
@@ -281,11 +360,10 @@ class Word_Recognizer:
         # divide the forward-probability of the most likely word by the sum of the forward probabilities of all the 48 words
         confidence = np.exp(word_likelihoods.max(axis=0) - logsumexp(word_likelihoods, axis=0))
         confidence[np.isnan(confidence)] = 1.0
+
         # the most likely word and its confidence
         print(result)
         print(confidence)
-        
-        # print(word_confidence)
 
     def save(self, i_epoch):
         fn = os.path.join(data_dir, "%d.mdl.pkl" % i_epoch)
@@ -299,9 +377,13 @@ class Word_Recognizer:
         return pickle.load(open(os.path.join(data_dir, "%d.mdl.pkl" % i_epoch), "rb"))
 
 def main():
-    n_epochs = 10
-    wr = Word_Recognizer()
-    wr.train(num_epochs=n_epochs)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--find_N",  action="store_true")
+    parser.add_argument("--num_epochs", type=int, default=10)
+
+    wr = Word_Recognizer(parser.parse_args())
+
+    wr.train()
 
 if __name__ == '__main__':
     main()
